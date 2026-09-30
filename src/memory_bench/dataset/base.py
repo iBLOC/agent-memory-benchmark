@@ -7,12 +7,15 @@ from ..utils import count_tokens
 _DEFAULT_OPEN_PROMPT = """\
 You are a helpful assistant. Answer the following question based ONLY on the provided context.
 
+Important:
+- Give the answer as a short, direct fact (one line). No preamble, no explanation, no "Based on the context...".
+- The context is a ranked list of memory snippets. The first snippet is usually the most relevant. Look for an explicit statement of the fact in the snippets; if you find one, quote or paraphrase its exact wording.
+- If the fact is not in the context, reply exactly: I don't have enough information to answer that.
+
 Context:
 {context}
 
-Question: {query}
-
-Think step by step about what the context says, then provide your answer.\
+Question: {query}\
 """
 
 _DEFAULT_MCQ_PROMPT = """\
