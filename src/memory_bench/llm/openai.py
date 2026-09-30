@@ -1,11 +1,16 @@
 import json
 import os
+import re
 import time
 
 from .base import LLM, Schema
 
 _MAX_RETRIES = 6
 _RETRY_BASE_DELAY = 5
+
+# Find the first balanced {...} block (handles nested braces); used to peel
+# the JSON object out of the model's free-form json_object response.
+_JSON_OBJECT_RE = re.compile(r"\{(?:[^{}]|\{[^{}]*\})*\}")
 
 
 class OpenAILLM(LLM):
@@ -25,27 +30,60 @@ class OpenAILLM(LLM):
             "required": schema.required,
             "additionalProperties": False,
         }
+        # OpenAI supports strict json_schema; DeepSeek and most local OpenAI
+        # clones only support json_object. Try the strict schema first and fall
+        # back to json_object (extract the first {...} block) when the backend
+        # rejects response_format.
+        formats = [
+            {"type": "json_schema",
+             "json_schema": {"name": "response", "schema": schema_json, "strict": True}},
+            {"type": "json_object"},
+        ]
         delay = _RETRY_BASE_DELAY
         last_exc = None
-        for attempt in range(_MAX_RETRIES):
-            try:
-                response = self._client.chat.completions.create(
-                    model=self._model,
-                    messages=[{"role": "user", "content": prompt}],
-                    response_format={
-                        "type": "json_schema",
-                        "json_schema": {"name": "response", "schema": schema_json, "strict": True},
-                    },
-                )
-                text = response.choices[0].message.content
-                return json.loads(text)
-            except Exception as e:
-                last_exc = e
-                msg = str(e)
-                if "429" in msg or "rate" in msg.lower():
+        for fmt in formats:
+            for attempt in range(_MAX_RETRIES):
+                try:
+                    messages = [{"role": "user", "content": prompt}]
+                    # DeepSeek (and others) require the literal token 'json' in
+                    # the prompt before they honour response_format=json_object.
+                    if fmt["type"] == "json_object":
+                        messages = [
+                            {"role": "system", "content": "Return a single json object."},
+                            {"role": "user", "content": prompt},
+                        ]
+                    response = self._client.chat.completions.create(
+                        model=self._model,
+                        messages=messages,
+                        response_format=fmt,
+                    )
+                    text = (response.choices[0].message.content or "").strip()
+                    # DeepSeek-flash occasionally returns empty content on long
+                    # prompts; retry with a fresh request rather than reporting
+                    # an empty JSON object upstream.
+                    if not text:
+                        raise RuntimeError("empty content from LLM (silent-fail)")
+                    if fmt["type"] == "json_object":
+                        match = _JSON_OBJECT_RE.search(text)
+                        if match:
+                            text = match.group(0)
+                        else:
+                            raise RuntimeError("no JSON object found in LLM output")
+                    return json.loads(text)
+                except Exception as e:
+                    last_exc = e
+                    msg = str(e)
+                    if fmt["type"] == "json_schema" and "response_format" in msg.lower():
+                        # This backend doesn't support json_schema; try the next format.
+                        break
+                    if "429" in msg or "rate" in msg.lower():
+                        if attempt < _MAX_RETRIES - 1:
+                            time.sleep(delay)
+                            delay *= 2
+                            continue
                     if attempt < _MAX_RETRIES - 1:
                         time.sleep(delay)
                         delay *= 2
                         continue
-                raise
-        raise RuntimeError(f"OpenAI request failed after {_MAX_RETRIES} retries: {last_exc}")
+                    raise
+        raise RuntimeError(f"OpenAI request failed after retries: {last_exc}")

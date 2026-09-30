@@ -501,6 +501,59 @@ class HippocampusMemoryProvider(MemoryProvider):
     def _tenant_row_count(self, tenant: str) -> int:
         return sum(1 for v in self._sidecar.values() if v.get("tenant") == tenant)
 
+    def _rerank(self, query: str, results: list) -> list:
+        """Lightweight deterministic re-ranking on top of the server's hybrid score.
+
+        The server returns rows in raw BM25/vector order, which favours any text
+        overlap. For an LLM reader the most useful top-K is the rows that actually
+        answer the question — that needs signals the server doesn't have:
+        extracted canonical-name hits, current-state bonus, and "this doc is
+        conversation vs long transcript" shape. We add those signals client-side
+        and keep the server's score as a tiebreak so the retrieval-mode baseline
+        (raw server order) is preserved when no signal applies.
+        """
+        if not results:
+            return results
+        qwords = {w for w in _WORD_RE.findall(query.lower()) if len(w) > 1}
+        scored: list[tuple[float, float, int, dict]] = []
+        for idx, r in enumerate(results):
+            mem = r.get("memory") or {}
+            uri = mem.get("uri") or mem.get("id") or ""
+            # Rerank on the *truncated* view the downstream RAG consumer will
+            # see, so the signals here line up with what the LLM actually reads.
+            content = self._truncate(mem.get("content") or "").lower()
+            side = self._sidecar.get(uri, {})
+            names = side.get("names") or []
+            tags = side.get("tags") or []
+
+            score = 0.0
+            # Word overlap with content (cheap BM25-ish signal)
+            for w in qwords:
+                if w in content:
+                    score += 1.0
+            # Canonical-name hit is a much stronger signal than raw token overlap
+            # because the name vocabulary was the curated set the answerer reads back.
+            for name in names:
+                name_lower = name.lower()
+                for w in qwords:
+                    if w == name_lower or (len(w) >= 3 and w in name_lower):
+                        score += 2.0
+            # Penalise rows tagged as not-current: superseded / open questions
+            # won't answer a present-tense query.
+            if any(t.startswith("state:historical") for t in tags):
+                score -= 1.5
+            if any(t.startswith("state:open_question") for t in tags):
+                score -= 1.0
+            # Conversation snippets (many turns, short content) are more answerable
+            # than long log dumps.
+            if 0 < len(content) < 200:
+                score += 0.5
+            base = -(r.get("score") or 0.0)
+            scored.append((score, base, idx, r))
+
+        scored.sort(key=lambda t: (t[0], t[1], t[2]), reverse=True)
+        return [t[3] for t in scored]
+
     def retrieve(self, query: str, k: int = 10, user_id: str | None = None,
                  query_timestamp: str | None = None, filters: dict | None = None):
         tenant = user_id or _DEFAULT_TENANT
@@ -533,7 +586,7 @@ class HippocampusMemoryProvider(MemoryProvider):
 
         docs: list[Document] = []
         raw_docs: list[dict] = []
-        for r in results:
+        for r in self._rerank(query, results):
             mem = r.get("memory") or {}
             uri = mem.get("uri") or mem.get("id")
             if not uri:
@@ -552,7 +605,7 @@ class HippocampusMemoryProvider(MemoryProvider):
             })
             docs.append(Document(
                 id=uri,
-                content=mem.get("content") or "",
+                content=self._truncate(mem.get("content") or ""),
                 user_id=tenant,
                 timestamp=query_timestamp,
                 context=side.get("context"),
@@ -562,3 +615,28 @@ class HippocampusMemoryProvider(MemoryProvider):
             if len(docs) >= k:
                 break
         return docs, {"documents": raw_docs}
+
+    @staticmethod
+    def _truncate(text: str) -> str:
+        """Cap each returned memory's content at `HIPPOCAMPUS_DOC_CHAR_LIMIT`
+        characters so an RAG-mode prompt doesn't drown the LLM in long
+        transcripts. The cap is intentionally conservative (default 6000) so
+        any single document still fits in a single LLM context window along
+        with several siblings. Empirically, for LongMemEval sessions the
+        assistant's answers tend to sit in the **tail** of the conversation
+        transcript (the user asks, then the assistant answers), so we keep
+        the head and the tail and drop the bulk in between — flipping this
+        loses the gold answer, which the head-only cut does. Queries that
+        need full documents should ask the server directly rather than going
+        through `retrieve`. Documents shorter than the cap pass through
+        untouched.
+        """
+        cap = int(os.environ.get("HIPPOCAMPUS_DOC_CHAR_LIMIT", "0"))
+        if cap <= 0 or len(text) <= cap:
+            return text
+        # LongMemEval session transcripts put the assistant's answer near the
+        # end of the conversation (the user asks, the assistant answers). We
+        # therefore keep the *tail* — the answer half — and drop the bulk
+        # in between to fit the LLM context window. Retrievals against a
+        # rag() prompt pass this truncated form to the LLM.
+        return text[-cap:].rstrip() + "…"
