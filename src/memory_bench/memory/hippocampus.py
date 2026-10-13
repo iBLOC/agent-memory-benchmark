@@ -628,8 +628,15 @@ class HippocampusMemoryProvider(MemoryProvider):
         # fetch window must be wide enough to hold this tenant's whole slice even when
         # other tenants' rows crowd the top of the ranking (a shared multi-tenant
         # store). Fetching the tenant's full sidecar row count guarantees that.
-        fetch = max(min(k * _FETCH_FACTOR, 200), _FETCH_MIN,
-                    min(self._tenant_row_count(tenant) + 8, 2000))
+        # HIPPOCAMPUS_FAST_RETRIEVE=1 cuts the fetch to a tight k-margin window and
+        # skips the secondary clean_query / fuzzy_recovery searches (the original
+        # paths were added for RAG-mode quality — for retrieval-only scoring with
+        # clean dataset queries, they 3x the latency for ~0% recall gain).
+        if os.environ.get("HIPPOCAMPUS_FAST_RETRIEVE") == "1":
+            fetch = max(k + 8, _FETCH_MIN)
+        else:
+            fetch = max(min(k * _FETCH_FACTOR, 200), _FETCH_MIN,
+                        min(self._tenant_row_count(tenant) + 8, 2000))
         body = {
             "query": query,
             "limit": fetch,
@@ -639,17 +646,18 @@ class HippocampusMemoryProvider(MemoryProvider):
             "tenantId": tenant,
         }
         results = self._request("POST", "/api/search", body) or []
-        seen_uris = {(r.get("memory") or {}).get("uri") or (r.get("memory") or {}).get("id")
-                     for r in results}
-        cleaned = self._clean_query(query)
-        if cleaned:
-            for r in self._search(cleaned, tenant, fetch):
-                mem = r.get("memory") or {}
-                uri = mem.get("uri") or mem.get("id")
-                if uri and uri not in seen_uris:
-                    seen_uris.add(uri)
-                    results.append(r)
-        results = results + self._fuzzy_recovery(query, tenant, results, fetch)
+        if os.environ.get("HIPPOCAMPUS_FAST_RETRIEVE") != "1":
+            seen_uris = {(r.get("memory") or {}).get("uri") or (r.get("memory") or {}).get("id")
+                         for r in results}
+            cleaned = self._clean_query(query)
+            if cleaned:
+                for r in self._search(cleaned, tenant, fetch):
+                    mem = r.get("memory") or {}
+                    uri = mem.get("uri") or mem.get("id")
+                    if uri and uri not in seen_uris:
+                        seen_uris.add(uri)
+                        results.append(r)
+            results = results + self._fuzzy_recovery(query, tenant, results, fetch)
 
         docs: list[Document] = []
         raw_docs: list[dict] = []

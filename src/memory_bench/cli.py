@@ -51,6 +51,7 @@ def run(
     skip_ingested: bool = typer.Option(False, "--skip-ingested", help="Skip units already present in a previous run's output (resume mode for unit-sequential datasets)"),
     skip_retrieval: bool = typer.Option(False, "--skip-retrieval", help="Skip retrieval and re-run answer generation using cached contexts from the previous run"),
     skip_answer: bool = typer.Option(False, "--skip-answer", help="Skip retrieval and answer generation entirely — re-judge cached answers from the previous run"),
+    skip_judge: bool = typer.Option(False, "--skip-judge", help="Keyless runs: skip LLM judging (deterministic retrieval/coding scorers still run); retrieved docs are kept in the output JSON for offline scoring via scripts/compare_python_recall.py"),
     only_failed: bool = typer.Option(False, "--only-failed", help="Restrict queries to those that failed in the previous run"),
     show_raw: bool = typer.Option(False, "--show-raw", help="Print raw provider response after each query"),
     output_dir: Path = typer.Option(Path("outputs"), "--output-dir", "-o"),
@@ -58,7 +59,10 @@ def run(
     description: str = typer.Option(None, "--description", "-d", help="Optional description for this run (stored in the result JSON)"),
 ) -> None:
     """Run an evaluation on a single split (optionally filtered to a category)."""
-    _resolve_gemini_key()
+    if not skip_judge:
+        # Keyless runs defer scoring offline; a judge key is only required
+        # when the judge actually runs.
+        _resolve_gemini_key()
 
     ds = get_dataset(dataset)
 
@@ -70,7 +74,9 @@ def run(
         dataset=ds,
         split=split,
         memory=get_memory_provider(memory),
-        mode=get_mode(mode, llm=get_answer_llm()),
+        # Retrieval mode never touches an LLM; constructing the default answer
+        # provider eagerly would demand an API key keyless runs don't have.
+        mode=get_mode(mode, llm=None if mode == "retrieval" else get_answer_llm()),
         category=category,
         query_limit=query_limit,
         query_id=query_id,
@@ -81,6 +87,7 @@ def run(
         skip_ingested=skip_ingested,
         skip_retrieval=skip_retrieval,
         skip_answer=skip_answer,
+        skip_judge=skip_judge,
         only_failed=only_failed,
         show_raw=show_raw,
         run_name=name,

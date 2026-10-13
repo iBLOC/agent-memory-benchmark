@@ -50,6 +50,7 @@ class QueryResult:
     gold_answers: list[str]
     correct: bool
     judge_reason: str
+    gold_ids: list[str] = field(default_factory=list)  # document-ids considered correct (for offline hit@k on --skip-judge runs)
     score: float | None = None  # continuous score 0-1 (used by BEAM paper scoring); None means binary only
     meta: dict = field(default_factory=dict)  # propagated from Query.meta
     raw_response: dict | None = None  # raw provider response, free-form
