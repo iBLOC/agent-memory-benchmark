@@ -463,6 +463,14 @@ class BEAMDataset(Dataset):
     def default_judge_llm(self):
         # BEAM is judged with gemini-3.5-flash in code (more reliable rubric scoring than
         # 2.5-flash-lite; env-independent so results are consistent across runs).
+        # OMB_JUDGE_LLM override: without a valid Google key the Gemini client
+        # fails on EVERY rubric call and _rubric_item_score silently zeroes the
+        # whole run — honour an explicit judge override instead of failing soft.
+        import os
+        provider = os.environ.get("OMB_JUDGE_LLM")
+        if provider and provider != "gemini":
+            from ..llm import get_judge_llm
+            return get_judge_llm()
         from ..llm.gemini import GeminiLLM
         return GeminiLLM("gemini-3.5-flash")
 

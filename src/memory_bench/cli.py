@@ -9,7 +9,11 @@ from dotenv import load_dotenv
 from rich.console import Console
 from rich.table import Table
 
-load_dotenv(dotenv_path=Path(__file__).parents[2] / ".env", override=True)
+# override=False: explicit shell env wins over .env (standard precedence).
+# override=True silently defeated CI/judge overrides — e.g. a shell-exported
+# OPENAI_BASE_URL for a cross-family judge run was silently replaced by the
+# .env value, sending the judge to the wrong provider.
+load_dotenv(dotenv_path=Path(__file__).parents[2] / ".env", override=False)
 
 from .dataset import REGISTRY as DATASET_REGISTRY, get_dataset
 from .llm import REGISTRY as LLM_REGISTRY, get_llm, get_answer_llm

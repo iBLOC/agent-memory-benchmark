@@ -25,6 +25,8 @@ class HybridSearchMemoryProvider(MemoryProvider):
         "Retrieves top-k=50 chunks (prefetch 100 per branch)."
     )
     kind = "local"
+    provider = "qdrant"
+    variant = "hybrid"
     link = "https://qdrant.tech"
     logo = "https://www.google.com/s2/favicons?sz=32&domain=qdrant.tech"
 
@@ -110,7 +112,10 @@ class HybridSearchMemoryProvider(MemoryProvider):
         ]
         client.upsert(collection_name=_COLLECTION, points=points)
 
-    async def async_retrieve(self, query: str, k: int = 50, user_id: str | None = None, query_timestamp: str | None = None):
+    async def async_retrieve(
+        self, query: str, k: int = 50, user_id: str | None = None,
+        query_timestamp: str | None = None, filters: dict | None = None,
+    ):
         import asyncio
         return await asyncio.to_thread(self.retrieve, query, k, user_id, query_timestamp)
 

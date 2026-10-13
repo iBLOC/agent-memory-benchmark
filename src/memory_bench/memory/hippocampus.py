@@ -36,6 +36,7 @@ import os
 import re
 import socket
 import struct
+import sys
 import urllib.parse
 from pathlib import Path
 
@@ -100,10 +101,14 @@ _COMPOUND_NAMES = frozenset((
 ))
 
 
-def _hash_embedding(text: str, dim: int = _EMBEDDING_DIM) -> list[float]:
+def _hash_embedding(text: str, dim: int | None = None) -> list[float]:
     """Deterministic token-hash bag vector, L2-normalized.
 
-    Not semantic — exists only so inserts pass the server's non-null embedding path."""
+    Not semantic — exists only as a fallback when no embedding endpoint is
+    configured. Dim defaults to the server's LANCE_EMBEDDING_DIM (read each
+    call so a hot-swapped store still matches the active schema)."""
+    if dim is None:
+        dim = int(os.environ.get("LANCE_EMBEDDING_DIM", "1536"))
     vec = [0.0] * dim
     for token in text.lower().split():
         h = hashlib.sha256(token.encode()).digest()
@@ -372,19 +377,80 @@ class HippocampusMemoryProvider(MemoryProvider):
             content = f"(timestamp: {doc.timestamp}) {content}"
         return content
 
+    @staticmethod
+    def _ingest_truncate(text: str) -> str:
+        """Cap the STORED content at HIPPOCAMPUS_INGEST_CHAR_LIMIT chars
+        (head+tail kept). LifeBench-style sessions run 100-400KB; pushing
+        them whole through the server's per-insert path (Debug logging +
+        FTS + index buffers) OOMs the server (~14 alloc aborts per 10-unit
+        loop). The retrieve-time DOC_CHAR_LIMIT (<=15k) caps what the
+        answer LLM sees anyway, so a 24k stored cap loses ~nothing."""
+        cap = int(os.environ.get("HIPPOCAMPUS_INGEST_CHAR_LIMIT", "0"))
+        if cap <= 0 or len(text) <= cap:
+            return text
+        head = cap // 3
+        tail = cap - head
+        elided = "\n…[middle elided at ingest]…\n"
+        return text[:head] + elided + text[-tail:]
+
     def ingest(self, documents: list[Document]) -> None:
         for doc in documents:
-            content = self._fold_content(doc)
+            content = self._ingest_truncate(self._fold_content(doc))
+            embedding = self._embed(content)
+            if embedding is None:
+                continue
             body = {
                 "uri": doc.id,
                 "content": content,
                 "dimension": "resources",
                 "tenantId": doc.user_id or _DEFAULT_TENANT,
-                "embedding": _hash_embedding(content),
+                "embedding": embedding,
             }
             self._request("POST", "/api/memory", body)
             self._sidecar[doc.id] = self._index_record(doc)
         self._save_sidecar()
+
+    def _embed(self, text: str) -> list[float] | None:
+        """Compute the dense vector for `text` via the configured OpenAI-
+        compatible embeddings endpoint, or fall back to the deterministic hash
+        bag vector when the endpoint is unreachable or dim-mismatches."""
+        api_base = os.environ.get("LLM_API_BASE")
+        api_key = os.environ.get("LLM_API_KEY")
+        model = os.environ.get("EMBEDDING_MODEL")
+        if api_base and api_key and model:
+            try:
+                parsed = urllib.parse.urlparse(f"{api_base.rstrip('/')}/embeddings")
+                if parsed.scheme != "http":
+                    raise PermissionError(
+                        f"LLM_API_BASE must be http, got {parsed.scheme}")
+                host = parsed.hostname
+                if not host:
+                    raise PermissionError("LLM_API_BASE missing host")
+                infos = socket.getaddrinfo(host, parsed.port or 80)
+                sock_ip = infos[0][4][0]
+                ip = ipaddress.ip_address(sock_ip)
+                in_bench = ip in ipaddress.ip_network("198.18.0.0/15")
+                if not (in_bench or host in _LOCAL_HOSTS) and (
+                        ip.is_private or ip.is_loopback or ip.is_reserved
+                        or ip.is_link_local or ip.is_multicast or ip.is_unspecified):
+                    raise PermissionError(
+                        f"refusing non-public LLM_API_BASE {host!r} ({sock_ip})")
+                body = json.dumps({"input": [text], "model": model}).encode("utf-8")
+                req = urllib.request.Request(
+                    f"{api_base.rstrip('/')}/embeddings",
+                    data=body,
+                    headers={"Content-Type": "application/json",
+                             "Authorization": f"Bearer {api_key}"},
+                )
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    payload = json.loads(resp.read())
+                vec = payload["data"][0]["embedding"]
+                if isinstance(vec, list) and vec:
+                    return vec
+            except Exception as e:
+                print(f"  hippocampus _embed failed: {type(e).__name__}: {str(e)[:80]}",
+                      file=sys.stderr)
+        return _hash_embedding(text)
 
     # ---- retrieve --------------------------------------------------------
 
@@ -556,6 +622,7 @@ class HippocampusMemoryProvider(MemoryProvider):
 
     def retrieve(self, query: str, k: int = 10, user_id: str | None = None,
                  query_timestamp: str | None = None, filters: dict | None = None):
+        k = int(os.environ.get("HIPPOCAMPUS_RETRIEVE_K", str(k)))
         tenant = user_id or _DEFAULT_TENANT
         # The server ranks across ALL tenants and only post-filters by tenant, so the
         # fetch window must be wide enough to hold this tenant's whole slice even when
@@ -598,14 +665,19 @@ class HippocampusMemoryProvider(MemoryProvider):
             }
             if not self._passes(record, filters):
                 continue
+            content = self._truncate(mem.get("content") or "")
             raw_docs.append({
                 "uri": uri,
                 "score": r.get("score"),
                 "source": r.get("source"),
+                # LongMemEval's build_rag_prompt prefers json.dumps(raw_response)
+                # over the rendered context when raw is present — without the
+                # content here the answer LLM sees URIs and scores only.
+                "content": content,
             })
             docs.append(Document(
                 id=uri,
-                content=self._truncate(mem.get("content") or ""),
+                content=content,
                 user_id=tenant,
                 timestamp=query_timestamp,
                 context=side.get("context"),

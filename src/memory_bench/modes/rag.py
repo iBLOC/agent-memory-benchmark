@@ -46,7 +46,8 @@ class RAGMode(ResponseMode):
         meta = meta or {}
         query_timestamp = meta.get("query_timestamp")
         retrieval_query = meta.get("retrieval_query") or query
-        docs, raw_response = await memory.async_retrieve(retrieval_query, user_id=user_id, query_timestamp=query_timestamp)
+        k = int(meta.get("retrieval_limit") or 10)
+        docs, raw_response = await memory.async_retrieve(retrieval_query, k=k, user_id=user_id, query_timestamp=query_timestamp)
         retrieve_ms = (time.perf_counter() - t0) * 1000
 
         context = "\n\n".join(
@@ -70,14 +71,34 @@ class RAGMode(ResponseMode):
             prompt = prompt_fn(query, context, meta=effective_meta)
         else:
             prompt = _DEFAULT_OPEN_PROMPT.format(context=context, query=query)
-        data = self._llm.generate(prompt, _OPEN_SCHEMA)
-        return AnswerResult(
-            answer=data["answer"],
-            reasoning=data["reasoning"],
-            context=context,
-            retrieve_time_ms=round(retrieve_ms, 1),
-            raw_response=raw_response,
-        )
+        try:
+            data = self._llm.generate(prompt, _OPEN_SCHEMA)
+            return AnswerResult(
+                answer=data["answer"],
+                reasoning=data.get("reasoning", ""),
+                context=context,
+                retrieve_time_ms=round(retrieve_ms, 1),
+                raw_response=raw_response,
+            )
+        except KeyError as e:
+            # The LLM fell back to json_object and omitted one of {answer, reasoning}
+            # (DeepSeek and similar providers routinely drop reasoning). Re-ask
+            # once with explicit key names before failing.
+            if str(e) in ("'reasoning'", "'answer'") and prompt is not None:
+                augmented = (
+                    prompt
+                    + "\n\nRespond with exactly one json object using the keys "
+                      "answer (string) and reasoning (string). Do not omit any key."
+                )
+                data = self._llm.generate(augmented, _OPEN_SCHEMA)
+                return AnswerResult(
+                    answer=data.get("answer", ""),
+                    reasoning=data.get("reasoning", "answer generation returned malformed JSON"),
+                    context=context,
+                    retrieve_time_ms=round(retrieve_ms, 1),
+                    raw_response=raw_response,
+                )
+            raise
 
     def _answer_mcq(self, query: str, context: str, retrieve_ms: float, raw_response: dict | None, prompt_fn=None, meta: dict | None = None) -> AnswerResult:
         if prompt_fn:

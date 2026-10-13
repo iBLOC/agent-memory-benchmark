@@ -43,5 +43,23 @@ class GeminiJudge:
         if not prompt:
             gold_str = "\n".join(f"- {a}" for a in gold_answers)
             prompt = _PROMPT.format(query=query, gold_answers=gold_str, answer=answer)
-        data = self._llm.generate(prompt, _SCHEMA)
-        return JudgeResult(correct=bool(data["correct"]), reason=data["reason"])
+        try:
+            data = self._llm.generate(prompt, _SCHEMA)
+            return JudgeResult(correct=bool(data["correct"]), reason=data["reason"])
+        except KeyError as e:
+            # The LLM fell back to json_object mode and dropped a required key
+            # (DeepSeek and similar providers routinely omit `reason` in their
+            # free-form JSON). Re-ask once with explicit key names before
+            # propagating the failure.
+            if str(e) in ("'reason'", "'correct'") and prompt is not None:
+                augmented = (
+                    prompt
+                    + "\n\nRespond with exactly one json object using the keys "
+                      "correct (true/false) and reason (string). Do not omit any key."
+                )
+                data = self._llm.generate(augmented, _SCHEMA)
+                return JudgeResult(
+                    correct=bool(data.get("correct", False)),
+                    reason=data.get("reason", "judge returned malformed JSON"),
+                )
+            raise
