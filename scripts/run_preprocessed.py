@@ -215,7 +215,11 @@ def score(queries, docs_by_uri, url_base, topk, limit, seed):
             # Works for BEAM (which has gold_answers like "There is no
             # information..." for abstention) and similar open-qa splits.
             if rank is None:
-                gold_text = " ".join(q.get("gold_answers") or []).lower()
+                # gold_answers entries are not always strings — LME-S
+                # stores bare ints in some rows. Coerce defensively.
+                gold_text = " ".join(
+                    str(a) for a in (q.get("gold_answers") or [])
+                ).lower()
                 if gold_text and len(gold_text) > 20:
                     needle = gold_text[:80]  # first 80 chars is plenty
                     for j, u in enumerate(uris):
