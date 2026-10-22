@@ -18,6 +18,27 @@ which carries exactly the gold_ids we need for hit@k scoring. This runner
 reads those two files directly and drives the hippocampus provider over
 HTTP, bypassing the dataset loaders entirely.
 
+SCORING IS **NOT** EQUIVALENT TO THE AMB HARNESS — read this before
+comparing numbers:
+
+  * The AMB harness's `HippocampusMemoryProvider.retrieve()` applies a
+    client-side `_rerank()` pass after the server returns: canonical-name
+    hits are worth +2.0, raw query-word overlap +1.0, `state:historical`
+    rows are penalised -1.5, and short rows get +0.5. That pass was
+    written for LongMemEval's LLM-reader scenario and moves LME-S hit@10
+    by roughly 30 points.
+  * This runner has no rerank. Its numbers are "server retrieval only".
+
+So the numbers are comparable *within* this runner (and against
+scripts/run_baselines.py, which also has no rerank), but NOT against a
+run produced by `amb run`. Measured on LME-S 500/500 with the same
+server and the same ingest:
+      amb run (with rerank)          hit@10 0.9200  MRR 0.8190
+      this runner (no rerank)         hit@10 0.5620  MRR 0.5600
+Cross-runner comparisons produced a false 30-point "regression" on
+2026-10-22 before this note existed. Use `amb run` for any number that
+will be published.
+
 Usage:
     python scripts/run_preprocessed.py <dataset> <split> [options]
 
