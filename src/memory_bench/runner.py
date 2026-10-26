@@ -5,6 +5,8 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 
+import os
+
 from .utils import count_tokens
 
 from rich.console import Console
@@ -79,6 +81,13 @@ class EvalRunner:
         cat_label = f"  [bold]Category:[/bold] {category}" if category else ""
         name_label = f"  [bold]Run:[/bold] {effective_name}" if run_name else ""
         console.print(f"\n[bold]Dataset:[/bold] {dataset.name}  [bold]Split:[/bold] {split}{cat_label}  [bold]Memory:[/bold] {memory.name}{name_label}  [bold]Mode:[/bold] {mode.name}\n")
+
+        # Tell the provider which mode is running. In retrieval mode the
+        # returned document set *is* the provider's answer, so a client-side
+        # re-ranker would measure the harness's heuristics instead of the
+        # provider's ranking. In rag mode the retrieved rows feed an LLM
+        # reader, where the extra signals still help.
+        os.environ["HIPPOCAMPUS_EVAL_MODE"] = mode.name
 
         task_type = dataset.task_type
         if task_type == "mcq":

@@ -577,8 +577,19 @@ class HippocampusMemoryProvider(MemoryProvider):
         conversation vs long transcript" shape. We add those signals client-side
         and keep the server's score as a tiebreak so the retrieval-mode baseline
         (raw server order) is preserved when no signal applies.
+
+        In *retrieval* mode the returned document set is the answer the
+        benchmark scores, so re-ranking it client-side measures the harness's
+        heuristics rather than the provider's ranking. The signals here are
+        lexical (query-word overlap, name hits), so they also systematically
+        favour lexical providers over ones whose server-side ranking is
+        already better. Retrieval mode therefore keeps the server's order.
         """
         if not results:
+            return results
+        if os.environ.get("HIPPOCAMPUS_EVAL_MODE") == "retrieval":
+            # Server order is the provider's ranking — that is what retrieval
+            # mode is supposed to measure.
             return results
         qwords = {w for w in _WORD_RE.findall(query.lower()) if len(w) > 1}
         scored: list[tuple[float, float, int, dict]] = []
