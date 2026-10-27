@@ -74,7 +74,7 @@ class CogneeMemoryProvider(MemoryProvider):
         llm_cfg = get_llm_config()
         llm_cfg.llm_provider = "openai"
         llm_cfg.llm_api_key = os.environ.get("OPENAI_API_KEY", "")
-        llm_cfg.llm_model = "gpt-4o-mini"
+        llm_cfg.llm_model = os.environ.get("COGNEE_LLM_MODEL", "gpt-4o-mini")
 
         # Use local fastembed embeddings — no API key needed.
         from cognee.infrastructure.databases.vector.embeddings.config import (

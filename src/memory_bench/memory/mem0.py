@@ -1,3 +1,4 @@
+import os
 import tempfile
 import uuid
 from pathlib import Path
@@ -32,11 +33,24 @@ class Mem0MemoryProvider(MemoryProvider):
         self._memory = self._build_memory(str(qdrant_path))
 
     def _build_memory(self, qdrant_path: str) -> Memory:
+        # LLM is env-selectable so the extraction model can be pointed at an
+        # OpenAI-compatible endpoint (e.g. DeepSeek) without code changes.
+        # Default remains the original gemini-2.5-flash.
+        provider = os.environ.get("MEM0_LLM_PROVIDER", "gemini")
+        model = os.environ.get("MEM0_LLM_MODEL", "gemini-2.5-flash")
+        llm_config: dict = {"model": model, "temperature": 0.0}
+        if provider == "openai":
+            # mem0's OpenAI LLM reads OPENAI_BASE_URL / OPENAI_API_KEY itself;
+            # pass them through explicitly so the config is self-contained.
+            if os.environ.get("OPENAI_BASE_URL"):
+                llm_config["openai_base_url"] = os.environ["OPENAI_BASE_URL"]
+            if os.environ.get("OPENAI_API_KEY"):
+                llm_config["api_key"] = os.environ["OPENAI_API_KEY"]
         return Memory.from_config(
             {
                 "llm": {
-                    "provider": "gemini",
-                    "config": {"model": "gemini-2.5-flash", "temperature": 0.0},
+                    "provider": provider,
+                    "config": llm_config,
                 },
                 "embedder": {
                     "provider": "huggingface",
