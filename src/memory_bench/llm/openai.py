@@ -16,7 +16,11 @@ _JSON_OBJECT_RE = re.compile(r"\{(?:[^{}]|\{[^{}]*\})*\}")
 class OpenAILLM(LLM):
     def __init__(self, model: str = "gpt-4o"):
         from openai import OpenAI
-        self._client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+        # The OpenAI SDK does not read OPENAI_BASE_URL on its own, so an
+        # OpenAI-compatible endpoint (DeepSeek, MiMo, a local proxy) is only
+        # reachable if the base URL is passed explicitly. Unset -> api.openai.com.
+        base_url = os.environ.get("OPENAI_BASE_URL") or os.environ.get("OPENAI_API_BASE")
+        self._client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"), base_url=base_url)
         self._model = model
 
     @property
