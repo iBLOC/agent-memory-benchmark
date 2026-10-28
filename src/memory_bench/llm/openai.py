@@ -38,11 +38,18 @@ class OpenAILLM(LLM):
         # clones only support json_object. Try the strict schema first and fall
         # back to json_object (extract the first {...} block) when the backend
         # rejects response_format.
+        #
+        # MiniMax accepts response_format=json_schema without error but ignores
+        # it and answers in prose, so the strict attempt would fail at json.loads
+        # instead of falling back. OMB_JSON_MODE=json_object pins the wire
+        # format for such endpoints.
         formats = [
             {"type": "json_schema",
              "json_schema": {"name": "response", "schema": schema_json, "strict": True}},
             {"type": "json_object"},
         ]
+        if os.environ.get("OMB_JSON_MODE", "").lower() == "json_object":
+            formats = [formats[1]]
         delay = _RETRY_BASE_DELAY
         last_exc = None
         for fmt in formats:
