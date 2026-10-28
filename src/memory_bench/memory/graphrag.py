@@ -79,7 +79,9 @@ class GraphRAGMemoryProvider(MemoryProvider):
                 "graphrag requires an OpenAI-compatible key (OPENAI_API_KEY or "
                 "LLM_API_KEY) — this graphrag version ships no mock provider."
             )
-        self._root_dir = store_dir / "graphrag_workspace"
+        # Absolute: the graphrag CLI runs with cwd set to the per-user root, so a
+        # relative --root would resolve against that cwd instead of the harness's.
+        self._root_dir = (store_dir / "graphrag_workspace").resolve()
         if reset and self._root_dir.exists():
             shutil.rmtree(self._root_dir)
         self._root_dir.mkdir(parents=True, exist_ok=True)
@@ -129,6 +131,14 @@ class GraphRAGMemoryProvider(MemoryProvider):
         post-relaunch schema (completion_models / embedding_models registries)."""
         llm_model = os.environ.get("GRAPH_RAG_LLM_MODEL", "gpt-4o-mini")
         emb_model = os.environ.get("GRAPH_RAG_EMB_MODEL", "text-embedding-3-small")
+        # OpenAI-compatible endpoints need an explicit base URL: OpenAI-hosted
+        # models are the only ones reachable at the default api.openai.com.
+        # Lets completion run on DeepSeek while embeddings run on a local
+        # MiniLM server (DeepSeek has no embedding endpoint).
+        llm_api_base = os.environ.get("GRAPH_RAG_LLM_API_BASE")
+        emb_api_base = os.environ.get("GRAPH_RAG_EMB_API_BASE")
+        llm_base_line = f"    api_base: {llm_api_base}\n" if llm_api_base else ""
+        emb_base_line = f"    api_base: {emb_api_base}\n" if emb_api_base else ""
         content = f"""\
 completion_models:
   default_completion_model:
@@ -136,7 +146,7 @@ completion_models:
     model: {llm_model}
     auth_method: api_key
     api_key: ${{GRAPHRAG_API_KEY}}
-    retry:
+{llm_base_line}    retry:
       type: exponential_backoff
 
 embedding_models:
@@ -145,7 +155,7 @@ embedding_models:
     model: {emb_model}
     auth_method: api_key
     api_key: ${{GRAPHRAG_API_KEY}}
-    retry:
+{emb_base_line}    retry:
       type: exponential_backoff
 
 input:
