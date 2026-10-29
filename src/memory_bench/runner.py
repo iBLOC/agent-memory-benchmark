@@ -14,6 +14,23 @@ from rich.progress import Progress, SpinnerColumn, BarColumn, TaskProgressColumn
 
 _CONCURRENCY = 4
 
+# Markers of a request the provider refused on its own terms (content filter,
+# policy block, malformed input). Unlike 429/5xx these never succeed on a
+# retry, so the query is recorded as failed instead of aborting the run.
+_REJECTION_MARKERS = (
+    "422",
+    "unprocessable",
+    "content_filter",
+    "content policy",
+    "sensitive",
+)
+
+
+def _is_provider_rejection(msg: str) -> bool:
+    lowered = msg.lower()
+    return any(marker in lowered for marker in _REJECTION_MARKERS)
+
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -191,6 +208,27 @@ class EvalRunner:
                         wait = 15 * (2 ** _attempt)
                         logger.warning("[query:%s] transient error (attempt %d/4), retrying in %ds: %s", q.id, _attempt + 1, wait, msg[:120])
                         await asyncio.sleep(wait)
+                    elif _is_provider_rejection(msg):
+                        # The provider refused this prompt outright — a content
+                        # filter, a malformed request, a policy block. That is a
+                        # per-query outcome, not a run-level failure: one
+                        # poisoned document must not kill a 500-question run.
+                        logger.warning("[query:%s] provider rejected the request: %s", q.id, msg[:160])
+                        return QueryResult(
+                            query_id=q.id,
+                            query=q.query,
+                            answer="",
+                            reasoning="",
+                            context="",
+                            context_tokens=0,
+                            retrieve_time_ms=0.0,
+                            gold_answers=q.gold_answers,
+                            gold_ids=q.gold_ids,
+                            correct=False,
+                            judge_reason=f"provider rejected the request: {msg[:160]}",
+                            score=None,
+                            meta=q.meta,
+                        )
                     else:
                         raise
             raise RuntimeError("unreachable")
