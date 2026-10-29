@@ -16,6 +16,7 @@ _OPTIONAL: dict[str, tuple[str, str]] = {
     "hindsight-coding": ("hscoding", "HsCodingProvider"),
     "bm25": ("bm25", "BM25MemoryProvider"),
     "cognee": ("cognee", "CogneeMemoryProvider"),
+    "edgequake": ("edgequake", "EdgeQuakeMemoryProvider"),
     "graphrag": ("graphrag", "GraphRAGMemoryProvider"),
     "hindsight": ("hindsight", "HindsightMemoryProvider"),
     "hindsight-cloud": ("hindsight", "HindsightCloudMemoryProvider"),
