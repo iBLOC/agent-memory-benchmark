@@ -66,6 +66,11 @@ class EdgeQuakeMemoryProvider(MemoryProvider):
         self._embedding_provider = os.environ.get("EDGEQUAKE_EMBEDDING_PROVIDER", "lmstudio")
         self._workspaces: dict[str, str] = {}
         self._by_doc: dict[str, str] = {}
+        # EdgeQuake document id -> the AMB document id we stored as its title.
+        # Retrieval returns chunks keyed by EdgeQuake's own document ids, and
+        # the benchmark scores gold recall by the AMB ids, so the two have to
+        # be bridged.
+        self._doc_titles: dict[str, str] = {}
         # A fresh workspace per run: EdgeQuake's wipe is asynchronous and
         # rejects uploads with 409 while it runs, and reusing a workspace
         # would leak the previous run's documents into this run's retrieval.
@@ -190,6 +195,26 @@ class EdgeQuakeMemoryProvider(MemoryProvider):
                     return
                 time.sleep(2)
 
+    def _source_document_id(self, chunk: dict) -> str | None:
+        lineage = chunk.get("lineage") or {}
+        return lineage.get("source_document_id") or chunk.get("document_id")
+
+    def _titles_for(self, ws: str | None) -> dict[str, str]:
+        """Map EdgeQuake document ids to the AMB ids stored as their title."""
+        if not ws:
+            return {}
+        if ws not in self._doc_titles:
+            titles: dict[str, str] = {}
+            try:
+                listed = self._request("GET", "/documents", workspace=ws)
+            except Exception:  # noqa: BLE001 - the mapping is best effort
+                listed = {}
+            for item in listed.get("documents") or listed.get("items") or []:
+                if item.get("id") and item.get("title"):
+                    titles[str(item["id"])] = str(item["title"])
+            self._doc_titles[ws] = titles
+        return self._doc_titles[ws]
+
     def _workspace_for(self, user_id: str | None) -> str | None:
         if not user_id:
             return None
@@ -274,11 +299,13 @@ class EdgeQuakeMemoryProvider(MemoryProvider):
         )
         bundle = out.get("bundle") or {}
         chunks = bundle.get("chunks") or []
+        titles = self._titles_for(ws)
         docs: list[Document] = []
         for i, ch in enumerate(chunks[:k]):
             content = ch.get("content") or ch.get("text") or ""
+            doc_id = self._source_document_id(ch) or str(ch.get("id") or "")
             docs.append(Document(
-                id=str(ch.get("id") or ch.get("document_id") or f"chunk-{i}"),
+                id=titles.get(doc_id, doc_id) or f"chunk-{i}",
                 content=content,
                 user_id=user_id,
             ))
