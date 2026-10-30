@@ -20,7 +20,18 @@ class OpenAILLM(LLM):
         # OpenAI-compatible endpoint (DeepSeek, MiMo, a local proxy) is only
         # reachable if the base URL is passed explicitly. Unset -> api.openai.com.
         base_url = os.environ.get("OPENAI_BASE_URL") or os.environ.get("OPENAI_API_BASE")
-        self._client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"), base_url=base_url)
+        # A request timeout is not optional: without one a single hung
+        # connection blocks the whole run, because the client waits forever
+        # and the harness has no way to move on. A timed-out query is
+        # retried by the caller, and if it keeps failing the query is
+        # scored as wrong rather than the run hanging.
+        timeout = float(os.environ.get("OMB_LLM_TIMEOUT", "180"))
+        self._client = OpenAI(
+            api_key=os.environ.get("OPENAI_API_KEY"),
+            base_url=base_url,
+            timeout=timeout,
+            max_retries=int(os.environ.get("OMB_LLM_RETRIES", "2")),
+        )
         self._model = model
 
     @property
