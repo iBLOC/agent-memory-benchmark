@@ -360,6 +360,26 @@
     "active_total": null
   },
   {
+    "path": "outputs/longmemeval/vanilla-mml/rag/s.json",
+    "dataset": "longmemeval",
+    "run_name": "vanilla-mml",
+    "memory": "vanilla",
+    "mode": "rag",
+    "split": "s",
+    "total_queries": 500,
+    "correct": 0,
+    "accuracy": 0.0,
+    "ingestion_time_ms": 4.6,
+    "ingested_docs": 1032,
+    "avg_retrieve_time_ms": 0.1,
+    "avg_context_tokens": 0.0,
+    "category": null,
+    "mean_precision": null,
+    "mean_recall": null,
+    "active_passes": null,
+    "active_total": null
+  },
+  {
     "path": "outputs/personamem/cognee/rag/32k.json",
     "dataset": "personamem",
     "run_name": "cognee",
