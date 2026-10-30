@@ -56,6 +56,9 @@ export OMB_JUDGE_LLM=openai   OMB_JUDGE_MODEL=MiniMax-M3.1-Flash
 # in prose; without this the harness fails at json.loads() instead of falling
 # back to json_object.
 export OMB_JSON_MODE=json_object
+# A request timeout is not optional: without one a single hung connection
+# blocks the whole run.
+export OMB_LLM_TIMEOUT=180
 ```
 
 `scripts/run_mml_round.sh <provider>` runs a round with that configuration.
