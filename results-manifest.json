@@ -220,6 +220,26 @@
     "active_total": null
   },
   {
+    "path": "outputs/longmemeval/edgequake-mml/rag/s.json",
+    "dataset": "longmemeval",
+    "run_name": "edgequake-mml",
+    "memory": "edgequake",
+    "mode": "rag",
+    "split": "s",
+    "total_queries": 2,
+    "correct": 0,
+    "accuracy": 0.0,
+    "ingestion_time_ms": 1417.9,
+    "ingested_docs": 92,
+    "avg_retrieve_time_ms": 2084.4,
+    "avg_context_tokens": 15677.5,
+    "category": "multi-session",
+    "mean_precision": null,
+    "mean_recall": null,
+    "active_passes": null,
+    "active_total": null
+  },
+  {
     "path": "outputs/longmemeval/hindsight/rag/s.json",
     "dataset": "longmemeval",
     "run_name": "hindsight",
