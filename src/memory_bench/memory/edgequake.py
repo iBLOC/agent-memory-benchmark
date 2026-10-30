@@ -22,6 +22,7 @@ import os
 import time
 import urllib.error
 import urllib.request
+import uuid
 from pathlib import Path
 
 from ..models import Document
@@ -65,6 +66,10 @@ class EdgeQuakeMemoryProvider(MemoryProvider):
         self._embedding_provider = os.environ.get("EDGEQUAKE_EMBEDDING_PROVIDER", "lmstudio")
         self._workspaces: dict[str, str] = {}
         self._by_doc: dict[str, str] = {}
+        # A fresh workspace per run: EdgeQuake's wipe is asynchronous and
+        # rejects uploads with 409 while it runs, and reusing a workspace
+        # would leak the previous run's documents into this run's retrieval.
+        self._run_tag = os.environ.get("EDGEQUAKE_RUN_TAG", "") or uuid.uuid4().hex[:8]
 
     # ------------------------------------------------------------------ http
 
@@ -98,20 +103,36 @@ class EdgeQuakeMemoryProvider(MemoryProvider):
         self._by_doc.clear()
         if not unit_ids:
             return
+        if reset:
+            self._drop_stale_workspaces()
         for uid in sorted(unit_ids):
             ws = self._create_workspace(uid)
             self._configure_workspace(ws)
-            if reset:
-                self._wipe_workspace(ws)
             self._workspaces[uid] = ws
 
+    def _drop_stale_workspaces(self) -> None:
+        """Remove workspaces from earlier runs (the tenant caps them)."""
+        try:
+            existing = self._request("GET", f"/tenants/{self.tenant}/workspaces")
+        except Exception:  # noqa: BLE001 - best effort
+            return
+        for ws in existing.get("items") or existing.get("workspaces") or []:
+            name = str(ws.get("name") or "")
+            if self._run_tag in name:
+                continue
+            try:
+                self._request("DELETE", f"/workspaces/{ws['id']}")
+            except Exception:  # noqa: BLE001
+                pass
+
     def _create_workspace(self, uid: str) -> str:
+        name = f"{uid}-{self._run_tag}"
         existing = self._request("GET", f"/tenants/{self.tenant}/workspaces")
         for ws in existing.get("items") or existing.get("workspaces") or []:
-            if ws.get("name") == uid:
+            if ws.get("name") == name:
                 return ws["id"]
         created = self._request(
-            "POST", f"/tenants/{self.tenant}/workspaces", {"name": uid}
+            "POST", f"/tenants/{self.tenant}/workspaces", {"name": name}
         )
         return created["id"]
 
@@ -149,12 +170,25 @@ class EdgeQuakeMemoryProvider(MemoryProvider):
             raise RuntimeError(f"edgequake could not configure workspace {ws}: {exc}") from exc
 
     def _wipe_workspace(self, ws: str) -> None:
-        """Clear documents left in a reused workspace (reset runs)."""
+        """Clear documents left in a reused workspace (reset runs).
+
+        The wipe is asynchronous: it returns a track id and the API rejects
+        uploads with 409 "Workspace wipe in progress" until it finishes, so
+        the wipe has to be waited for before the first upload.
+        """
         try:
-            self._request("DELETE", "/documents", {}, workspace=ws,
-                          headers={"X-EdgeQuake-Confirm": "delete-all-documents"})
+            out = self._request("DELETE", "/documents", {}, workspace=ws,
+                                 headers={"X-EdgeQuake-Confirm": "delete-all-documents"})
         except Exception:  # noqa: BLE001 - wiping is best effort
-            pass
+            return
+        track = out.get("wipe_track_id") or out.get("task_id") or out.get("track_id")
+        if track:
+            deadline = time.time() + 300
+            while time.time() < deadline:
+                status, _ = self._task_status(track, ws)
+                if status in ("completed", "succeeded", "done", "failed", "error"):
+                    return
+                time.sleep(2)
 
     def _workspace_for(self, user_id: str | None) -> str | None:
         if not user_id:
@@ -196,7 +230,9 @@ class EdgeQuakeMemoryProvider(MemoryProvider):
             still: list[tuple[str, str]] = []
             for task, ws in pending:
                 status, st = self._task_status(task, ws)
-                if status in ("completed", "succeeded", "done"):
+                # EdgeQuake's task states are pending / processing / indexed /
+                # failed / cancelled — "indexed" is the success terminal.
+                if status in ("completed", "succeeded", "done", "indexed"):
                     continue
                 if status in ("failed", "error", "cancelled"):
                     raise RuntimeError(
@@ -219,7 +255,8 @@ class EdgeQuakeMemoryProvider(MemoryProvider):
         while time.time() < deadline:
             st = self._request("GET", f"/tasks/{task_id}", workspace=workspace)
             status = st.get("status") or status
-            if status in ("completed", "succeeded", "done", "failed", "error", "cancelled"):
+            if status in ("completed", "succeeded", "done", "indexed",
+                          "failed", "error", "cancelled"):
                 break
             time.sleep(2)
         if status in ("failed", "error", "cancelled"):
