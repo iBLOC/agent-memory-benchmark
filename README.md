@@ -39,6 +39,30 @@ cp .env.example .env   # or just create .env with:
 # GEMINI_API_KEY=...
 ```
 
+### Which LLM scores the runs
+
+**Every benchmark round is read and judged by the same model, so the rows are
+comparable.** For the hippocampus rounds that model is
+`MiniMax-M3.1-Flash` on the MiniMax token plan (a subscription, so a
+500-question round costs no marginal money and cannot run out mid-run the way
+a pay-per-token balance does).
+
+```bash
+export OPENAI_API_KEY=$MINIMAX_API_KEY
+export OPENAI_BASE_URL=https://api.minimaxi.com/v1
+export OMB_ANSWER_LLM=openai  OMB_ANSWER_MODEL=MiniMax-M3.1-Flash
+export OMB_JUDGE_LLM=openai   OMB_JUDGE_MODEL=MiniMax-M3.1-Flash
+# MiniMax accepts response_format=json_schema and then ignores it, answering
+# in prose; without this the harness fails at json.loads() instead of falling
+# back to json_object.
+export OMB_JSON_MODE=json_object
+```
+
+`scripts/run_mml_round.sh <provider>` runs a round with that configuration.
+Rows scored by a different model are a separate round and must not be mixed:
+the deepseek-flash rows (hippocampus 78.0% on LME-S 500) predate this rule
+and are kept only as a historical comparison.
+
 ## Usage
 
 ```bash
