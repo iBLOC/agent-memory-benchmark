@@ -360,6 +360,26 @@
     "active_total": null
   },
   {
+    "path": "outputs/longmemeval/mem0-mml/rag/s.json",
+    "dataset": "longmemeval",
+    "run_name": "mem0-mml",
+    "memory": "mem0",
+    "mode": "rag",
+    "split": "s",
+    "total_queries": 23,
+    "correct": 20,
+    "accuracy": 0.8695652173913043,
+    "ingestion_time_ms": 2903485.0,
+    "ingested_docs": 343,
+    "avg_retrieve_time_ms": 108.6,
+    "avg_context_tokens": 1438.8,
+    "category": null,
+    "mean_precision": null,
+    "mean_recall": null,
+    "active_passes": null,
+    "active_total": null
+  },
+  {
     "path": "outputs/longmemeval/vanilla/rag/s.json",
     "dataset": "longmemeval",
     "run_name": "vanilla",
